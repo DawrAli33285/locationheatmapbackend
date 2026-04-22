@@ -166,15 +166,23 @@ module.exports.parseExcel = async (req, res) => {
 
     const isPrimaryCompetitor = keys.includes('primary') || keys.includes('competitor');
     const isAddressFormat = keys.includes('address') || keys.includes('city state zip');
-
-    if (!isPrimaryCompetitor && !isAddressFormat) {
+    const isEmployeeFormat = keys.some(k => k.includes('address line')) && keys.some(k => k.includes('city, state zip'));
+    
+    if (!isPrimaryCompetitor && !isAddressFormat && !isEmployeeFormat) {
       return res.status(422).json({
-        error: 'Unrecognized format. Expected columns: "primary"/"competitor" OR "Address"/"City State Zip"'
+        error: 'Unrecognized format. Expected columns: "primary"/"competitor" OR "Address"/"City State Zip" OR employee directory format'
       });
     }
 
+
+
     const primaryMap = {};
     const competitorMap = {};
+
+   
+    // Find exact column names for employee format
+    const addressLineKey   = Object.keys(rawRows[0] || {}).find(k => k.toLowerCase().includes('address line'));
+    const cityStateZipKey  = Object.keys(rawRows[0] || {}).find(k => k.toLowerCase().includes('city, state zip'));
 
     rawRows.forEach((row) => {
       console.log("ROW")
@@ -184,6 +192,13 @@ module.exports.parseExcel = async (req, res) => {
         const competitorRaw = String(row['competitor'] || row['Competitor'] || '').trim();
         if (primaryRaw)    primaryMap[primaryRaw]    = (primaryMap[primaryRaw]    || 0) + 1;
         if (competitorRaw) competitorMap[competitorRaw] = (competitorMap[competitorRaw] || 0) + 1;
+      } else if (isEmployeeFormat) {
+        const address      = String(row[addressLineKey]  || '').trim();
+        const cityStateZip = String(row[cityStateZipKey] || '').trim();
+        if (!address && !cityStateZip) return;
+        const key = `${address}||${cityStateZip}`;
+        if (primaryMap[key]) primaryMap[key].count += 1;
+        else primaryMap[key] = { address, cityStateZip, count: 1 };
       } else {
         const address      = String(row['Address']        || '').trim();
         const cityStateZip = String(row['City State Zip'] || '').trim();
@@ -221,15 +236,32 @@ module.exports.parseExcel = async (req, res) => {
       });
 
     } else {
-      const addresses = Object.entries(primaryMap)
-        .map(([key, val]) => val)
-        .sort((a, b) => b.count - a.count);
+      const addressEntries = Object.entries(primaryMap)
+      .map(([key, val]) => val)
+      .sort((a, b) => b.count - a.count);
 
+    // For employee format, geocode server-side so we can use the reliable geocoder
+    if (isEmployeeFormat) {
+      const geocoded = [];
+      for (const entry of addressEntries) {
+        const fullAddress = `${entry.address}, ${entry.cityStateZip}`;
+        const coords = await geocodeAddress(fullAddress) || await geocodeAddress(entry.cityStateZip);
+        console.log(`[GEO] "${fullAddress}" → ${coords ? coords : 'null (skipped)'}`);
+        if (coords) geocoded.push({ ...entry, coords });
+      }
       return res.json({
         rows: rawRows.length,
-        addresses,
-        format: 'address-zip',
+        addresses: geocoded,
+        format: 'employee',
       });
+    }
+
+    return res.json({
+      rows: rawRows.length,
+      addresses: addressEntries,
+      format: 'address-zip',
+    });
+    
     }
   } catch (err) {
     console.error('Parse error:', err);
