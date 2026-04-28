@@ -124,14 +124,20 @@ async function geocodeAddress(fullAddress) {
   for (const query of [fullAddress, simplifyAddress(fullAddress)]) {
     if (!query) continue;
     try {
-      await sleep(300);
-      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1&lang=en`;
-      const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      await sleep(1100);
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&addressdetails=1`;
+      const res = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'YourAppName/1.0 (your@email.com)'  // ← required by Nominatim policy
+        }
+      });
       const data = await res.json();
-      const feature = data?.features?.[0];
-      if (feature) {
-        const [lng, lat] = feature.geometry.coordinates;
-        console.log(`[GEO] "${query}" → lat:${lat} lng:${lng}`);
+      const place = data?.[0];
+      if (place) {
+        const lat = parseFloat(place.lat);
+        const lng = parseFloat(place.lon);  // note: Nominatim uses "lon", not "lng"
+      
         return [lat, lng];
       } else {
         console.log(`[GEO] No result for "${query}"`);
